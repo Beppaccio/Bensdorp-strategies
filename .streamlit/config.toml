@@ -9,6 +9,12 @@ font = "sans serif"
 maxUploadSize = 10
 enableCORS = true
 enableXsrfProtection = true
+headless = true
+port = 8501
+address = "0.0.0.0"
 
 [browser]
 gatherUsageStats = false
+
+[logger]
+level = "error"
