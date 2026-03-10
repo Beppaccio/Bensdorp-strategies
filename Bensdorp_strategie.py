@@ -4,10 +4,11 @@ import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import pandas_ta as ta
 from datetime import datetime, timedelta
 import warnings
+import sys
 import os
+
 warnings.filterwarnings('ignore')
 
 # Configurazione della pagina Streamlit - DEVE ESSERE LA PRIMA COMANDA STREAMLIT
@@ -16,6 +17,70 @@ st.set_page_config(
     page_icon="📈",
     layout="wide"
 )
+
+# Verifica versione Python
+st.sidebar.info(f"🐍 Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+
+# Funzioni di utilità per indicatori tecnici (fallback)
+def calculate_sma(data, length):
+    """Calcola Simple Moving Average manualmente"""
+    return data.rolling(window=length).mean()
+
+def calculate_rsi(data, length=14):
+    """Calcola RSI manualmente"""
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_adx(high, low, close, length=14):
+    """Calcolo semplificato ADX"""
+    df = pd.DataFrame({'high': high, 'low': low, 'close': close})
+    
+    # True Range
+    df['tr'] = np.maximum(
+        df['high'] - df['low'],
+        np.maximum(
+            abs(df['high'] - df['close'].shift()),
+            abs(df['low'] - df['close'].shift())
+        )
+    )
+    df['atr'] = df['tr'].rolling(window=length).mean()
+    
+    # Directional Movement
+    df['up_move'] = df['high'] - df['high'].shift()
+    df['down_move'] = df['low'].shift() - df['low']
+    
+    df['plus_dm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0)
+    df['minus_dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
+    
+    df['plus_di'] = 100 * (df['plus_dm'].rolling(window=length).mean() / df['atr'])
+    df['minus_di'] = 100 * (df['minus_dm'].rolling(window=length).mean() / df['atr'])
+    
+    # ADX
+    df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
+    df['adx'] = df['dx'].rolling(window=length).mean()
+    
+    return df['adx']
+
+def calculate_bbands(data, length=20, std=2):
+    """Calcola Bollinger Bands manualmente"""
+    sma = data.rolling(window=length).mean()
+    std_dev = data.rolling(window=length).std()
+    upper = sma + (std_dev * std)
+    lower = sma - (std_dev * std)
+    return upper, sma, lower
+
+# Tentativo di importare pandas_ta con fallback
+try:
+    import pandas_ta as ta
+    TA_AVAILABLE = True
+    st.sidebar.success("✅ pandas_ta disponibile")
+except ImportError:
+    TA_AVAILABLE = False
+    st.sidebar.warning("⚠️ pandas_ta non disponibile - uso funzioni manuali")
 
 # Titolo e descrizione
 st.title("📊 Laurens Bensdorp - Sistemi di Trading Automatici")
@@ -81,27 +146,46 @@ def load_data(ticker, start, end):
         if data.empty:
             st.error(f"Nessun dato trovato per {ticker}")
             return None
-            
+        
         # Aggiungi indicatori tecnici di base
-        data['SMA_20'] = ta.sma(data['Close'], length=20)
-        data['SMA_50'] = ta.sma(data['Close'], length=50)
-        data['SMA_200'] = ta.sma(data['Close'], length=200)
-        data['RSI'] = ta.rsi(data['Close'], length=14)
-        data['Volume_SMA'] = ta.sma(data['Volume'], length=20)
+        if TA_AVAILABLE:
+            # Usa pandas_ta se disponibile
+            data['SMA_20'] = ta.sma(data['Close'], length=20)
+            data['SMA_50'] = ta.sma(data['Close'], length=50)
+            data['SMA_200'] = ta.sma(data['Close'], length=200)
+            data['RSI'] = ta.rsi(data['Close'], length=14)
+            data['Volume_SMA'] = ta.sma(data['Volume'], length=20)
+            
+            # Calcola ADX
+            adx_df = ta.adx(data['High'], data['Low'], data['Close'], length=14)
+            data['ADX'] = adx_df['ADX_14']
+            
+            # Calcola Bollinger Bands
+            bb_df = ta.bbands(data['Close'], length=20, std=2)
+            if bb_df is not None and len(bb_df.columns) >= 3:
+                data['BB_upper'] = bb_df.iloc[:, 0]
+                data['BB_middle'] = bb_df.iloc[:, 1]
+                data['BB_lower'] = bb_df.iloc[:, 2]
+        else:
+            # Usa funzioni manuali
+            data['SMA_20'] = calculate_sma(data['Close'], 20)
+            data['SMA_50'] = calculate_sma(data['Close'], 50)
+            data['SMA_200'] = calculate_sma(data['Close'], 200)
+            data['RSI'] = calculate_rsi(data['Close'], 14)
+            data['Volume_SMA'] = calculate_sma(data['Volume'], 20)
+            data['ADX'] = calculate_adx(data['High'], data['Low'], data['Close'], 14)
+            
+            # Bollinger Bands manuali
+            upper, middle, lower = calculate_bbands(data['Close'], 20, 2)
+            data['BB_upper'] = upper
+            data['BB_middle'] = middle
+            data['BB_lower'] = lower
         
-        # Calcola ADX
-        adx_df = ta.adx(data['High'], data['Low'], data['Close'], length=14)
-        data['ADX'] = adx_df['ADX_14']
-        
-        # Calcola volatilità
+        # Calcola volatilità (sempre con pandas)
         data['Volatility'] = data['Close'].pct_change().rolling(20).std() * np.sqrt(252)
         
-        # Calcola Bollinger Bands
-        bb_df = ta.bbands(data['Close'], length=20, std=2)
-        if bb_df is not None and len(bb_df.columns) >= 3:
-            data['BB_upper'] = bb_df.iloc[:, 0]
-            data['BB_middle'] = bb_df.iloc[:, 1]
-            data['BB_lower'] = bb_df.iloc[:, 2]
+        # Pulisci NaN
+        data = data.fillna(method='bfill').fillna(method='ffill')
         
         return data
     except Exception as e:
@@ -160,8 +244,8 @@ def strategy_1_trend_high_momentum(data, budget, risk_percentage):
     
     # Calcola indicatori
     data_copy = data.copy()
-    data_copy['SMA_25'] = ta.sma(data_copy['Close'], length=25)
-    data_copy['SMA_50'] = ta.sma(data_copy['Close'], length=50)
+    data_copy['SMA_25'] = calculate_sma(data_copy['Close'], 25)
+    data_copy['SMA_50'] = calculate_sma(data_copy['Close'], 50)
     data_copy['ROC_200'] = data_copy['Close'].pct_change(200) * 100
     
     # Condizioni di ingresso
@@ -247,7 +331,7 @@ def strategy_3_mean_reversion_selloff(data, budget, risk_percentage):
     
     # Calcola indicatori
     data_copy = data.copy()
-    data_copy['SMA_50'] = ta.sma(data_copy['Close'], length=50)
+    data_copy['SMA_50'] = calculate_sma(data_copy['Close'], 50)
     
     # Condizioni: uptrend e oversold
     uptrend = data_copy['Close'] > data_copy['SMA_50']
@@ -431,7 +515,7 @@ def strategy_7_catastrophe_hedge(data, budget, risk_percentage):
     
     # Calcola momentum ribassista
     data_copy = data.copy()
-    data_copy['200ma'] = ta.sma(data_copy['Close'], length=200)
+    data_copy['200ma'] = calculate_sma(data_copy['Close'], 200)
     data_copy['Returns_5d'] = data_copy['Close'].pct_change(5) * 100
     data_copy['Returns_20d'] = data_copy['Close'].pct_change(20) * 100
     
@@ -571,7 +655,6 @@ def calculate_performance(data, signals, budget):
     portfolio_value.iloc[0] = budget
     cash = budget
     position = 0
-    entry_price = 0
     
     for i in range(1, len(data)):
         if signals['Position'].iloc[i] != 0:
@@ -581,7 +664,6 @@ def calculate_performance(data, signals, budget):
                 if cash >= cost:
                     cash -= cost
                     position += shares
-                    entry_price = data['Close'].iloc[i]
             else:  # Vendita
                 shares = -signals['Position'].iloc[i]
                 if position >= shares:
@@ -636,7 +718,6 @@ if st.button("🚀 Esegui Analisi", type="primary"):
             
             if strategy == "Tutte le Strategie (Portafoglio)":
                 # Esegui tutte le strategie
-                all_signals = {}
                 all_performances = {}
                 
                 cols = st.columns(2)
@@ -644,7 +725,6 @@ if st.button("🚀 Esegui Analisi", type="primary"):
                     with cols[idx % 2]:
                         st.subheader(strat_name)
                         signals = strat_func(data.copy(), budget, risk_percentage)
-                        all_signals[strat_name] = signals
                         
                         perf = calculate_performance(data, signals, budget)
                         if perf:
@@ -748,6 +828,4 @@ if st.button("🚀 Esegui Analisi", type="primary"):
 # Footer
 st.divider()
 st.markdown("""
-**Nota:** Questo strumento è solo a scopo educativo. Il trading comporta rischi significativi.
-Le performance passate non garantiscono risultati futuri. 
-""")
+**Not
