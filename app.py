@@ -828,4 +828,6 @@ if st.button("🚀 Esegui Analisi", type="primary"):
 # Footer
 st.divider()
 st.markdown("""
-**Not
+**Nota:** Questo strumento è solo a scopo educativo. Il trading comporta rischi significativi.
+Le performance passate non garantiscono risultati futuri.
+""")
