@@ -8,6 +8,11 @@ from datetime import datetime, timedelta
 import warnings
 import sys
 import os
+import time
+import random
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 warnings.filterwarnings('ignore')
 
@@ -138,13 +143,46 @@ with st.sidebar:
 # Funzioni di utilità
 @st.cache_data(ttl=3600)  # Cache per 1 ora
 def load_data(ticker, start, end):
-    """Carica i dati da Yahoo Finance"""
+    """Carica i dati da Yahoo Finance con strategie anti-blocco"""
     try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(start=start, end=end)
+        # Crea una sessione con retry logic
+        session = requests.Session()
+        
+        # Configura i retry per gestire errori temporanei
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504]
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        # Imposta headers per sembrare un browser reale
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+        })
+        
+        # Mostra tentativo di connessione
+        with st.spinner(f"Tentativo di caricare {ticker}..."):
+            # Aggiungi un piccolo ritardo casuale per evitare pattern
+            time.sleep(random.uniform(1, 3))
+            
+            # Usa yfinance con la sessione configurata
+            stock = yf.Ticker(ticker, session=session)
+            data = stock.history(start=start, end=end)
+            
+            if data.empty:
+                st.warning(f"Nessun dato trovato per {ticker} con metodo standard. Provo metodo alternativo...")
+                # Prova un metodo alternativo
+                data = yf.download(ticker, start=start, end=end, progress=False, session=session)
         
         if data.empty:
-            st.error(f"Nessun dato trovato per {ticker}")
+            st.error(f"Impossibile recuperare dati per {ticker} dopo vari tentativi.")
             return None
         
         # Aggiungi indicatori tecnici di base
@@ -187,7 +225,9 @@ def load_data(ticker, start, end):
         # Pulisci NaN
         data = data.fillna(method='bfill').fillna(method='ffill')
         
+        st.success(f"✅ Dati caricati con successo per {ticker}")
         return data
+        
     except Exception as e:
         st.error(f"Errore nel caricamento dei dati: {e}")
         return None
@@ -825,7 +865,7 @@ if st.button("🚀 Esegui Analisi", type="primary"):
         else:
             st.error("Impossibile caricare i dati. Verifica il simbolo del titolo.")
 
-# Footer
+# Footer - CORRETTO con tripli apici chiusi
 st.divider()
 st.markdown("""
 **Nota:** Questo strumento è solo a scopo educativo. Il trading comporta rischi significativi.
